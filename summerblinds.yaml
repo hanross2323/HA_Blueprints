@@ -1,8 +1,8 @@
 blueprint:
-  name: Persianas solares industrial (Este/Oeste sin rebotes)
+  name: Persianas solares industrial (Este/Oeste estable)
   description: >
-    Control robusto de persianas según posición solar con histéresis y estado
-    persistente para evitar movimientos repetidos.
+    Control de persianas según posición del sol con histéresis y estado persistente.
+    Evita rebotes, órdenes duplicadas y errores de plantilla.
 
   domain: automation
 
@@ -141,7 +141,7 @@ action:
       - conditions:
           - condition: template
             value_template: >
-              {{ east_active and is_state(east_state, 'off') }}
+              {{ east_active and states(east_state) == 'off' }}
 
         sequence:
 
@@ -166,7 +166,7 @@ action:
       - conditions:
           - condition: template
             value_template: >
-              {{ west_active and is_state(west_state, 'off') }}
+              {{ west_active and states(west_state) == 'off' }}
 
         sequence:
 
@@ -188,7 +188,7 @@ action:
 
       - condition: template
         value_template: >
-          {{ is_state(east_state,'on') or is_state(west_state,'on') }}
+          {{ states(east_state) == 'on' or states(west_state) == 'on' }}
 
       - service: input_boolean.turn_off
         target:
