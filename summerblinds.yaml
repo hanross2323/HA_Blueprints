@@ -1,19 +1,48 @@
 blueprint:
-  name: Persianas según posición del sol (Este/Oeste)
+  name: Persianas solares industrial (multi-fachada + anti-rebote)
   description: >
-    Baja automáticamente las persianas orientadas al Este u Oeste cuando el
-    sol incide sobre ellas y las vuelve a subir cuando deja de hacerlo.
+    Control avanzado de persianas según posición del sol con histéresis,
+    estado interno y soporte multi-fachada (Este/Oeste/Norte/Sur/etc).
 
   domain: automation
 
   input:
 
     sun_entity:
-      name: Entidad Sol
+      name: Sol
       default: sun.sun
       selector:
         entity:
           domain: sun
+
+    min_elevation:
+      name: Elevación mínima del sol
+      default: 12
+      selector:
+        number:
+          min: 0
+          max: 90
+          step: 1
+          unit_of_measurement: "°"
+
+    # --- FACHADA ESTE ---
+    east_azimuth_center:
+      name: Centro azimut Este
+      default: 90
+      selector:
+        number:
+          min: 0
+          max: 360
+          step: 1
+
+    east_hysteresis:
+      name: Histéresis Este (± grados)
+      default: 25
+      selector:
+        number:
+          min: 1
+          max: 90
+          step: 1
 
     east_covers:
       name: Persianas Este
@@ -22,6 +51,25 @@ blueprint:
           entity:
             domain: cover
 
+    # --- FACHADA OESTE ---
+    west_azimuth_center:
+      name: Centro azimut Oeste
+      default: 270
+      selector:
+        number:
+          min: 0
+          max: 360
+          step: 1
+
+    west_hysteresis:
+      name: Histéresis Oeste (± grados)
+      default: 25
+      selector:
+        number:
+          min: 1
+          max: 90
+          step: 1
+
     west_covers:
       name: Persianas Oeste
       selector:
@@ -29,133 +77,129 @@ blueprint:
           entity:
             domain: cover
 
-    min_elevation:
-      name: Elevación mínima
-      default: 15
+    # --- MEMORIA ESTADO ---
+    east_state:
+      name: Helper estado Este
       selector:
-        number:
-          min: 0
-          max: 90
-          step: 1
-          unit_of_measurement: "°"
+        entity:
+          domain: input_boolean
 
-    east_start:
-      name: Azimut inicio Este
-      default: 60
+    west_state:
+      name: Helper estado Oeste
       selector:
-        number:
-          min: 0
-          max: 360
-          step: 1
+        entity:
+          domain: input_boolean
 
-    east_end:
-      name: Azimut fin Este
-      default: 150
-      selector:
-        number:
-          min: 0
-          max: 360
-          step: 1
-
-    west_start:
-      name: Azimut inicio Oeste
-      default: 210
-      selector:
-        number:
-          min: 0
-          max: 360
-          step: 1
-
-    west_end:
-      name: Azimut fin Oeste
-      default: 300
-      selector:
-        number:
-          min: 0
-          max: 360
-          step: 1
 
 trigger:
-
   - platform: state
     entity_id: !input sun_entity
 
   - platform: time_pattern
     minutes: "/5"
 
+
 variables:
 
-  sun_entity: !input sun_entity
-  min_elevation: !input min_elevation
+  sun: !input sun_entity
 
-  east_start: !input east_start
-  east_end: !input east_end
+  az: "{{ state_attr(sun,'azimuth') | float(0) }}"
+  el: "{{ state_attr(sun,'elevation') | float(0) }}"
 
-  west_start: !input west_start
-  west_end: !input west_end
+  min_el: !input min_elevation
 
-condition: []
+  east_center: !input east_azimuth_center
+  east_hyst: !input east_hysteresis
+
+  west_center: !input west_azimuth_center
+  west_hyst: !input west_hysteresis
+
+  east_on_min: "{{ east_center - east_hyst }}"
+  east_on_max: "{{ east_center + east_hyst }}"
+
+  west_on_min: "{{ west_center - west_hyst }}"
+  west_on_max: "{{ west_center + west_hyst }}"
+
+
+  east_active: >
+    {{ el > min_el and east_on_min <= az <= east_on_max }}
+
+  west_active: >
+    {{ el > min_el and west_on_min <= az <= west_on_max }}
+
 
 action:
 
-  - variables:
-
-      azimuth: >
-        {{ state_attr(sun_entity,'azimuth')|float }}
-
-      elevation: >
-        {{ state_attr(sun_entity,'elevation')|float }}
-
   - choose:
 
-      ####################################################
-      # ESTE
-      ####################################################
+      ########################################################
+      # EAST ACTIVE
+      ########################################################
 
       - conditions:
           - condition: template
             value_template: >
-              {{
-                elevation > min_elevation
-                and
-                east_start <= azimuth <= east_end
-              }}
+              {{ east_active and is_state(!input east_state, 'off') }}
 
         sequence:
 
-          - service: cover.close_cover
+          - service: input_boolean.turn_on
+            target:
+              entity_id: !input east_state
+
+          - service: input_boolean.turn_off
+            target:
+              entity_id: !input west_state
+
+          - service: cover.set_cover_position
             target: !input east_covers
+            data:
+              position: 0
 
-          - service: cover.open_cover
-            target: !input west_covers
 
-      ####################################################
-      # OESTE
-      ####################################################
+      ########################################################
+      # WEST ACTIVE
+      ########################################################
 
       - conditions:
           - condition: template
             value_template: >
-              {{
-                elevation > min_elevation
-                and
-                west_start <= azimuth <= west_end
-              }}
+              {{ west_active and is_state(!input west_state, 'off') }}
 
         sequence:
 
-          - service: cover.close_cover
-            target: !input west_covers
+          - service: input_boolean.turn_on
+            target:
+              entity_id: !input west_state
 
-          - service: cover.open_cover
-            target: !input east_covers
+          - service: input_boolean.turn_off
+            target:
+              entity_id: !input east_state
+
+          - service: cover.set_cover_position
+            target: !input west_covers
+            data:
+              position: 0
+
 
     default:
+
+      - condition: template
+        value_template: >
+          {{ is_state(!input east_state,'on')
+             or is_state(!input west_state,'on') }}
+
+      - service: input_boolean.turn_off
+        target:
+          entity_id:
+            - !input east_state
+            - !input west_state
 
       - service: cover.open_cover
         target: !input east_covers
 
       - service: cover.open_cover
         target: !input west_covers
+
 
 mode: single
