@@ -1,8 +1,8 @@
 blueprint:
-  name: Persianas solares industrial (multi-fachada + anti-rebote)
+  name: Persianas solares industrial (Este/Oeste sin rebotes)
   description: >
-    Control avanzado de persianas según posición del sol con histéresis,
-    estado interno y soporte multi-fachada (Este/Oeste/Norte/Sur/etc).
+    Control robusto de persianas según posición solar con histéresis y estado
+    persistente para evitar movimientos repetidos.
 
   domain: automation
 
@@ -25,8 +25,7 @@ blueprint:
           step: 1
           unit_of_measurement: "°"
 
-    # --- FACHADA ESTE ---
-    east_azimuth_center:
+    east_center:
       name: Centro azimut Este
       default: 90
       selector:
@@ -44,15 +43,7 @@ blueprint:
           max: 90
           step: 1
 
-    east_covers:
-      name: Persianas Este
-      selector:
-        target:
-          entity:
-            domain: cover
-
-    # --- FACHADA OESTE ---
-    west_azimuth_center:
+    west_center:
       name: Centro azimut Oeste
       default: 270
       selector:
@@ -70,6 +61,13 @@ blueprint:
           max: 90
           step: 1
 
+    east_covers:
+      name: Persianas Este
+      selector:
+        target:
+          entity:
+            domain: cover
+
     west_covers:
       name: Persianas Oeste
       selector:
@@ -77,15 +75,14 @@ blueprint:
           entity:
             domain: cover
 
-    # --- MEMORIA ESTADO ---
     east_state:
-      name: Helper estado Este
+      name: Helper estado Este (input_boolean)
       selector:
         entity:
           domain: input_boolean
 
     west_state:
-      name: Helper estado Oeste
+      name: Helper estado Oeste (input_boolean)
       selector:
         entity:
           domain: input_boolean
@@ -103,43 +100,48 @@ variables:
 
   sun: !input sun_entity
 
-  az: "{{ state_attr(sun,'azimuth') | float(0) }}"
-  el: "{{ state_attr(sun,'elevation') | float(0) }}"
+  east_state: !input east_state
+  west_state: !input west_state
 
   min_el: !input min_elevation
 
-  east_center: !input east_azimuth_center
+  east_center: !input east_center
   east_hyst: !input east_hysteresis
 
-  west_center: !input west_azimuth_center
+  west_center: !input west_center
   west_hyst: !input west_hysteresis
 
-  east_on_min: "{{ east_center - east_hyst }}"
-  east_on_max: "{{ east_center + east_hyst }}"
+  az: >
+    {{ state_attr(sun,'azimuth') | float(0) }}
 
-  west_on_min: "{{ west_center - west_hyst }}"
-  west_on_max: "{{ west_center + west_hyst }}"
+  el: >
+    {{ state_attr(sun,'elevation') | float(0) }}
 
+  east_min: "{{ east_center - east_hyst }}"
+  east_max: "{{ east_center + east_hyst }}"
+
+  west_min: "{{ west_center - west_hyst }}"
+  west_max: "{{ west_center + west_hyst }}"
 
   east_active: >
-    {{ el > min_el and east_on_min <= az <= east_on_max }}
+    {{ el > min_el and east_min <= az <= east_max }}
 
   west_active: >
-    {{ el > min_el and west_on_min <= az <= west_on_max }}
+    {{ el > min_el and west_min <= az <= west_max }}
 
 
 action:
 
   - choose:
 
-      ########################################################
+      #####################################################
       # EAST ACTIVE
-      ########################################################
+      #####################################################
 
       - conditions:
           - condition: template
             value_template: >
-              {{ east_active and is_state(!input east_state, 'off') }}
+              {{ east_active and is_state(east_state, 'off') }}
 
         sequence:
 
@@ -157,14 +159,14 @@ action:
               position: 0
 
 
-      ########################################################
+      #####################################################
       # WEST ACTIVE
-      ########################################################
+      #####################################################
 
       - conditions:
           - condition: template
             value_template: >
-              {{ west_active and is_state(!input west_state, 'off') }}
+              {{ west_active and is_state(west_state, 'off') }}
 
         sequence:
 
@@ -186,8 +188,7 @@ action:
 
       - condition: template
         value_template: >
-          {{ is_state(!input east_state,'on')
-             or is_state(!input west_state,'on') }}
+          {{ is_state(east_state,'on') or is_state(west_state,'on') }}
 
       - service: input_boolean.turn_off
         target:
