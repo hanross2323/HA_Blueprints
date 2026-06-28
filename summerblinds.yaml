@@ -1,0 +1,152 @@
+blueprint:
+  name: Persianas automáticas según posición del Sol
+  description: >
+    Baja automáticamente las persianas de la fachada donde incide el sol y las vuelve
+    a subir cuando deja de hacerlo.
+
+  domain: automation
+
+  input:
+
+    sun_entity:
+      name: Entidad del Sol
+      selector:
+        entity:
+          domain: sun
+      default: sun.sun
+
+    east_covers:
+      name: Persianas orientación Este
+      selector:
+        target:
+          entity:
+            domain: cover
+
+    west_covers:
+      name: Persianas orientación Oeste
+      selector:
+        target:
+          entity:
+            domain: cover
+
+    min_elevation:
+      name: Elevación mínima
+      default: 10
+      selector:
+        number:
+          min: 0
+          max: 90
+          step: 1
+          unit_of_measurement: "°"
+
+    east_start:
+      name: Azimut inicio Este
+      default: 60
+      selector:
+        number:
+          min: 0
+          max: 360
+          step: 1
+          unit_of_measurement: "°"
+
+    east_end:
+      name: Azimut fin Este
+      default: 150
+      selector:
+        number:
+          min: 0
+          max: 360
+          step: 1
+          unit_of_measurement: "°"
+
+    west_start:
+      name: Azimut inicio Oeste
+      default: 210
+      selector:
+        number:
+          min: 0
+          max: 360
+          step: 1
+          unit_of_measurement: "°"
+
+    west_end:
+      name: Azimut fin Oeste
+      default: 300
+      selector:
+        number:
+          min: 0
+          max: 360
+          step: 1
+          unit_of_measurement: "°"
+
+trigger:
+  - platform: state
+    entity_id: !input sun_entity
+
+  - platform: time_pattern
+    minutes: "/2"
+
+variables:
+
+  azimuth: "{{ state_attr(!input sun_entity, 'azimuth') | float(0) }}"
+  elevation: "{{ state_attr(!input sun_entity, 'elevation') | float(0) }}"
+
+  east_active: >
+    {{
+      elevation > (!input min_elevation)
+      and
+      azimuth >= (!input east_start)
+      and
+      azimuth <= (!input east_end)
+    }}
+
+  west_active: >
+    {{
+      elevation > (!input min_elevation)
+      and
+      azimuth >= (!input west_start)
+      and
+      azimuth <= (!input west_end)
+    }}
+
+action:
+
+  - choose:
+
+      #################################################
+      # ESTE
+      #################################################
+
+      - conditions:
+          - condition: template
+            value_template: "{{ east_active }}"
+        sequence:
+          - service: cover.close_cover
+            target: !input east_covers
+
+          - service: cover.open_cover
+            target: !input west_covers
+
+      #################################################
+      # OESTE
+      #################################################
+
+      - conditions:
+          - condition: template
+            value_template: "{{ west_active }}"
+        sequence:
+          - service: cover.close_cover
+            target: !input west_covers
+
+          - service: cover.open_cover
+            target: !input east_covers
+
+    default:
+
+      - service: cover.open_cover
+        target: !input east_covers
+
+      - service: cover.open_cover
+        target: !input west_covers
+
+mode: single
