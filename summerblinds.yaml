@@ -1,29 +1,29 @@
 blueprint:
-  name: Persianas automáticas según posición del Sol
+  name: Persianas según posición del sol (Este/Oeste)
   description: >
-    Baja automáticamente las persianas de la fachada donde incide el sol y las vuelve
-    a subir cuando deja de hacerlo.
+    Baja automáticamente las persianas orientadas al Este u Oeste cuando el
+    sol incide sobre ellas y las vuelve a subir cuando deja de hacerlo.
 
   domain: automation
 
   input:
 
     sun_entity:
-      name: Entidad del Sol
+      name: Entidad Sol
+      default: sun.sun
       selector:
         entity:
           domain: sun
-      default: sun.sun
 
     east_covers:
-      name: Persianas orientación Este
+      name: Persianas Este
       selector:
         target:
           entity:
             domain: cover
 
     west_covers:
-      name: Persianas orientación Oeste
+      name: Persianas Oeste
       selector:
         target:
           entity:
@@ -31,7 +31,7 @@ blueprint:
 
     min_elevation:
       name: Elevación mínima
-      default: 10
+      default: 15
       selector:
         number:
           min: 0
@@ -47,7 +47,6 @@ blueprint:
           min: 0
           max: 360
           step: 1
-          unit_of_measurement: "°"
 
     east_end:
       name: Azimut fin Este
@@ -57,7 +56,6 @@ blueprint:
           min: 0
           max: 360
           step: 1
-          unit_of_measurement: "°"
 
     west_start:
       name: Azimut inicio Oeste
@@ -67,7 +65,6 @@ blueprint:
           min: 0
           max: 360
           step: 1
-          unit_of_measurement: "°"
 
     west_end:
       name: Azimut fin Oeste
@@ -77,64 +74,76 @@ blueprint:
           min: 0
           max: 360
           step: 1
-          unit_of_measurement: "°"
 
 trigger:
+
   - platform: state
     entity_id: !input sun_entity
 
   - platform: time_pattern
-    minutes: "/2"
+    minutes: "/5"
 
 variables:
 
-  azimuth: "{{ state_attr(!input sun_entity, 'azimuth') | float(0) }}"
-  elevation: "{{ state_attr(!input sun_entity, 'elevation') | float(0) }}"
+  sun_entity: !input sun_entity
+  min_elevation: !input min_elevation
 
-  east_active: >
-    {{
-      elevation > (!input min_elevation)
-      and
-      azimuth >= (!input east_start)
-      and
-      azimuth <= (!input east_end)
-    }}
+  east_start: !input east_start
+  east_end: !input east_end
 
-  west_active: >
-    {{
-      elevation > (!input min_elevation)
-      and
-      azimuth >= (!input west_start)
-      and
-      azimuth <= (!input west_end)
-    }}
+  west_start: !input west_start
+  west_end: !input west_end
+
+condition: []
 
 action:
 
+  - variables:
+
+      azimuth: >
+        {{ state_attr(sun_entity,'azimuth')|float }}
+
+      elevation: >
+        {{ state_attr(sun_entity,'elevation')|float }}
+
   - choose:
 
-      #################################################
+      ####################################################
       # ESTE
-      #################################################
+      ####################################################
 
       - conditions:
           - condition: template
-            value_template: "{{ east_active }}"
+            value_template: >
+              {{
+                elevation > min_elevation
+                and
+                east_start <= azimuth <= east_end
+              }}
+
         sequence:
+
           - service: cover.close_cover
             target: !input east_covers
 
           - service: cover.open_cover
             target: !input west_covers
 
-      #################################################
+      ####################################################
       # OESTE
-      #################################################
+      ####################################################
 
       - conditions:
           - condition: template
-            value_template: "{{ west_active }}"
+            value_template: >
+              {{
+                elevation > min_elevation
+                and
+                west_start <= azimuth <= west_end
+              }}
+
         sequence:
+
           - service: cover.close_cover
             target: !input west_covers
 
