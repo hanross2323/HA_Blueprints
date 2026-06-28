@@ -1,8 +1,8 @@
 blueprint:
-  name: Persianas solares industrial (Este/Oeste estable)
+  name: Persianas solares industrial estable (anti-flicker real)
   description: >
-    Control de persianas según posición del sol con histéresis y estado persistente.
-    Evita rebotes, órdenes duplicadas y errores de plantilla.
+    Control de persianas con histéresis real (ON/OFF separado) y estado persistente.
+    Evita oscilaciones cuando el sol está en el límite de una fachada.
 
   domain: automation
 
@@ -16,7 +16,7 @@ blueprint:
           domain: sun
 
     min_elevation:
-      name: Elevación mínima del sol
+      name: Elevación mínima
       default: 12
       selector:
         number:
@@ -34,13 +34,22 @@ blueprint:
           max: 360
           step: 1
 
-    east_hysteresis:
-      name: Histéresis Este (± grados)
+    east_on_offset:
+      name: Histéresis ON Este (±)
       default: 25
       selector:
         number:
           min: 1
           max: 90
+          step: 1
+
+    east_off_offset:
+      name: Histéresis OFF Este (±)
+      default: 35
+      selector:
+        number:
+          min: 1
+          max: 120
           step: 1
 
     west_center:
@@ -52,13 +61,22 @@ blueprint:
           max: 360
           step: 1
 
-    west_hysteresis:
-      name: Histéresis Oeste (± grados)
+    west_on_offset:
+      name: Histéresis ON Oeste (±)
       default: 25
       selector:
         number:
           min: 1
           max: 90
+          step: 1
+
+    west_off_offset:
+      name: Histéresis OFF Oeste (±)
+      default: 35
+      selector:
+        number:
+          min: 1
+          max: 120
           step: 1
 
     east_covers:
@@ -103,31 +121,51 @@ variables:
   east_state: !input east_state
   west_state: !input west_state
 
+  az: "{{ state_attr(sun,'azimuth') | float(0) }}"
+  el: "{{ state_attr(sun,'elevation') | float(0) }}"
+
   min_el: !input min_elevation
 
   east_center: !input east_center
-  east_hyst: !input east_hysteresis
+  east_on: !input east_on_offset
+  east_off: !input east_off_offset
 
   west_center: !input west_center
-  west_hyst: !input west_hysteresis
+  west_on: !input west_on_offset
+  west_off: !input west_off_offset
 
-  az: >
-    {{ state_attr(sun,'azimuth') | float(0) }}
+  #####################################################
+  # ZONAS ESTE
+  #####################################################
 
-  el: >
-    {{ state_attr(sun,'elevation') | float(0) }}
+  east_on_min: "{{ east_center - east_on }}"
+  east_on_max: "{{ east_center + east_on }}"
 
-  east_min: "{{ east_center - east_hyst }}"
-  east_max: "{{ east_center + east_hyst }}"
+  east_off_min: "{{ east_center - east_off }}"
+  east_off_max: "{{ east_center + east_off }}"
 
-  west_min: "{{ west_center - west_hyst }}"
-  west_max: "{{ west_center + west_hyst }}"
+  east_in_on_zone: >
+    {{ el > min_el and east_on_min <= az <= east_on_max }}
 
-  east_active: >
-    {{ el > min_el and east_min <= az <= east_max }}
+  east_in_off_zone: >
+    {{ az < east_off_min or az > east_off_max }}
 
-  west_active: >
-    {{ el > min_el and west_min <= az <= west_max }}
+
+  #####################################################
+  # ZONAS OESTE
+  #####################################################
+
+  west_on_min: "{{ west_center - west_on }}"
+  west_on_max: "{{ west_center + west_on }}"
+
+  west_off_min: "{{ west_center - west_off }}"
+  west_off_max: "{{ west_center + west_off }}"
+
+  west_in_on_zone: >
+    {{ el > min_el and west_on_min <= az <= west_on_max }}
+
+  west_in_off_zone: >
+    {{ az < west_off_min or az > west_off_max }}
 
 
 action:
@@ -135,13 +173,13 @@ action:
   - choose:
 
       #####################################################
-      # EAST ACTIVE
+      # EAST ON
       #####################################################
 
       - conditions:
           - condition: template
             value_template: >
-              {{ east_active and states(east_state) == 'off' }}
+              {{ east_in_on_zone and states(east_state) == 'off' }}
 
         sequence:
 
@@ -160,13 +198,32 @@ action:
 
 
       #####################################################
-      # WEST ACTIVE
+      # EAST OFF
       #####################################################
 
       - conditions:
           - condition: template
             value_template: >
-              {{ west_active and states(west_state) == 'off' }}
+              {{ east_in_off_zone and states(east_state) == 'on' }}
+
+        sequence:
+
+          - service: input_boolean.turn_off
+            target:
+              entity_id: !input east_state
+
+          - service: cover.open_cover
+            target: !input east_covers
+
+
+      #####################################################
+      # WEST ON
+      #####################################################
+
+      - conditions:
+          - condition: template
+            value_template: >
+              {{ west_in_on_zone and states(west_state) == 'off' }}
 
         sequence:
 
@@ -184,23 +241,23 @@ action:
               position: 0
 
 
-    default:
+      #####################################################
+      # WEST OFF
+      #####################################################
 
-      - condition: template
-        value_template: >
-          {{ states(east_state) == 'on' or states(west_state) == 'on' }}
+      - conditions:
+          - condition: template
+            value_template: >
+              {{ west_in_off_zone and states(west_state) == 'on' }}
 
-      - service: input_boolean.turn_off
-        target:
-          entity_id:
-            - !input east_state
-            - !input west_state
+        sequence:
 
-      - service: cover.open_cover
-        target: !input east_covers
+          - service: input_boolean.turn_off
+            target:
+              entity_id: !input west_state
 
-      - service: cover.open_cover
-        target: !input west_covers
+          - service: cover.open_cover
+            target: !input west_covers
 
 
 mode: single
