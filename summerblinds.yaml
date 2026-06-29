@@ -1,8 +1,10 @@
 blueprint:
-  name: Persianas solares industrial estable (anti-flicker real)
+  name: Persianas solares industrial v2 (robusto)
   description: >
-    Control de persianas con histéresis real (ON/OFF separado) y estado persistente.
-    Evita oscilaciones cuando el sol está en el límite de una fachada.
+    Control estable de persianas basado en posición solar con lógica de
+    entrada/salida independiente, debounce temporal correcto, OFF dominante,
+    soporte de azimut envolvente (cruza 0°/360°), override manual y
+    notificaciones opcionales de debug.
 
   domain: automation
 
@@ -16,68 +18,69 @@ blueprint:
           domain: sun
 
     min_elevation:
-      name: Elevación mínima
-      default: 12
+      name: Elevación mínima del sol
+      description: >
+        Ángulo mínimo sobre el horizonte para considerar que el sol puede
+        impactar. Por debajo de este valor las persianas siempre suben.
+      default: 10
       selector:
         number:
           min: 0
           max: 90
-          step: 1
+          step: 0.5
           unit_of_measurement: "°"
 
+    debounce_minutes:
+      name: Tiempo anti-flicker (minutos)
+      description: >
+        El sol debe estar fuera de zona esta cantidad de minutos antes de
+        subir la persiana. Previene subidas/bajadas en zonas de transición.
+      default: 5
+      selector:
+        number:
+          min: 0
+          max: 30
+          step: 1
+          unit_of_measurement: min
+
+    # ── ESTE ─────────────────────────────────────────────────────────────────
+
     east_center:
-      name: Centro azimut Este
+      name: Azimut centro Este (°)
+      description: >
+        Azimut central de la fachada Este. 0°=Norte, 90°=Este, 180°=Sur,
+        270°=Oeste. Puede usar azimuts que crucen 0°/360°.
       default: 90
       selector:
         number:
           min: 0
           max: 360
           step: 1
+          unit_of_measurement: "°"
 
-    east_on_offset:
-      name: Histéresis ON Este (±)
+    east_margin_on:
+      name: Margen ON Este (±°)
+      description: Semiancho de la zona donde se baja la persiana.
       default: 25
       selector:
         number:
           min: 1
           max: 90
           step: 1
+          unit_of_measurement: "°"
 
-    east_off_offset:
-      name: Histéresis OFF Este (±)
+    east_margin_off:
+      name: Margen OFF Este (±°)
+      description: >
+        Semiancho de la zona donde la persiana permanece baja (histeresis).
+        Debe ser mayor que el margen ON para evitar flicker.
       default: 35
       selector:
         number:
           min: 1
           max: 120
           step: 1
-
-    west_center:
-      name: Centro azimut Oeste
-      default: 270
-      selector:
-        number:
-          min: 0
-          max: 360
-          step: 1
-
-    west_on_offset:
-      name: Histéresis ON Oeste (±)
-      default: 25
-      selector:
-        number:
-          min: 1
-          max: 90
-          step: 1
-
-    west_off_offset:
-      name: Histéresis OFF Oeste (±)
-      default: 35
-      selector:
-        number:
-          min: 1
-          max: 120
-          step: 1
+          unit_of_measurement: "°"
 
     east_covers:
       name: Persianas Este
@@ -86,6 +89,47 @@ blueprint:
           entity:
             domain: cover
 
+    east_state:
+      name: Helper booleano Este
+      description: >
+        input_boolean que registra si las persianas Este están en modo solar
+        bajado. Debe existir antes de usar este blueprint.
+      selector:
+        entity:
+          domain: input_boolean
+
+    # ── OESTE ────────────────────────────────────────────────────────────────
+
+    west_center:
+      name: Azimut centro Oeste (°)
+      default: 270
+      selector:
+        number:
+          min: 0
+          max: 360
+          step: 1
+          unit_of_measurement: "°"
+
+    west_margin_on:
+      name: Margen ON Oeste (±°)
+      default: 25
+      selector:
+        number:
+          min: 1
+          max: 90
+          step: 1
+          unit_of_measurement: "°"
+
+    west_margin_off:
+      name: Margen OFF Oeste (±°)
+      default: 35
+      selector:
+        number:
+          min: 1
+          max: 120
+          step: 1
+          unit_of_measurement: "°"
+
     west_covers:
       name: Persianas Oeste
       selector:
@@ -93,93 +137,130 @@ blueprint:
           entity:
             domain: cover
 
-    east_state:
-      name: Helper estado Este (input_boolean)
-      selector:
-        entity:
-          domain: input_boolean
-
     west_state:
-      name: Helper estado Oeste (input_boolean)
+      name: Helper booleano Oeste
       selector:
         entity:
           domain: input_boolean
 
+    # ── OPCIONALES ───────────────────────────────────────────────────────────
 
+    closed_position:
+      name: Posición "bajada" (%)
+      description: >
+        Posición de cierre solar. 0 = completamente cerrada.
+        Útil si quieres dejar algo de ventilación (ej. 10%).
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 50
+          step: 5
+          unit_of_measurement: "%"
+
+    notify_service:
+      name: Servicio de notificación (opcional)
+      description: >
+        Si se indica (ej. notify.mobile_app_telefono), envía avisos
+        cuando las persianas cambian de estado. Dejar vacío para desactivar.
+      default: ""
+      selector:
+        text:
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TRIGGERS
+# ─────────────────────────────────────────────────────────────────────────────
 trigger:
+
+  # Cambio de estado del sol (azimut o elevación)
   - platform: state
     entity_id: !input sun_entity
+    id: sol_cambio
 
+  # Pulso periódico de seguridad por si se pierde algún trigger de estado
   - platform: time_pattern
-    minutes: "/5"
+    minutes: "/3"
+    id: pulso_seguridad
+
+  # Arranque de HA — sincroniza estado inicial
+  - platform: homeassistant
+    event: start
+    id: ha_start
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# VARIABLES  (re-evaluadas en cada ejecución con valores frescos)
+# ─────────────────────────────────────────────────────────────────────────────
 variables:
 
   sun: !input sun_entity
-
-  east_state: !input east_state
-  west_state: !input west_state
-
-  az: "{{ state_attr(sun,'azimuth') | float(0) }}"
-  el: "{{ state_attr(sun,'elevation') | float(0) }}"
-
   min_el: !input min_elevation
+  debounce: !input debounce_minutes
+  closed_pos: !input closed_position
 
-  east_center: !input east_center
-  east_on: !input east_on_offset
-  east_off: !input east_off_offset
+  east_state_id: !input east_state
+  west_state_id: !input west_state
 
-  west_center: !input west_center
-  west_on: !input west_on_offset
-  west_off: !input west_off_offset
+  east_center_v: !input east_center
+  east_on_v: !input east_margin_on
+  east_off_v: !input east_margin_off
 
-  #####################################################
-  # ZONAS ESTE
-  #####################################################
+  west_center_v: !input west_center
+  west_on_v: !input west_margin_on
+  west_off_v: !input west_margin_off
 
-  east_on_min: "{{ east_center - east_on }}"
-  east_on_max: "{{ east_center + east_on }}"
+  notify_svc: !input notify_service
 
-  east_off_min: "{{ east_center - east_off }}"
-  east_off_max: "{{ east_center + east_off }}"
+  # Azimut y elevación actuales
+  az: "{{ state_attr(sun, 'azimuth') | float(0) }}"
+  el: "{{ state_attr(sun, 'elevation') | float(0) }}"
 
-  east_in_on_zone: >
-    {{ el > min_el and east_on_min <= az <= east_on_max }}
+  # ── Helper: in_zone con soporte de azimut envolvente ─────────────────────
+  # Normaliza la diferencia angular al rango [-180, 180]
+  # para que centros cercanos a 0°/360° funcionen correctamente.
+  # Ejemplo: centro=10°, margen=20° → cubre 350°–30° sin problemas.
 
-  east_in_off_zone: >
-    {{ az < east_off_min or az > east_off_max }}
+  east_diff: >
+    {% set d = (az - east_center_v + 180) % 360 - 180 %}
+    {{ d | abs }}
+
+  west_diff: >
+    {% set d = (az - west_center_v + 180) % 360 - 180 %}
+    {{ d | abs }}
+
+  # Zona ON: sol en ángulo y elevación suficiente
+  east_in_on:  "{{ el > min_el and east_diff <= east_on_v }}"
+  west_in_on:  "{{ el > min_el and west_diff <= west_on_v }}"
+
+  # Zona OFF: sale del margen exterior (histeresis) O el sol está bajo
+  east_out_off: "{{ el <= min_el or east_diff > east_off_v }}"
+  west_out_off: "{{ el <= min_el or west_diff > west_off_v }}"
+
+  # Estados actuales de los helpers
+  east_is_on: "{{ states(east_state_id) == 'on' }}"
+  west_is_on: "{{ states(west_state_id) == 'on' }}"
 
 
-  #####################################################
-  # ZONAS OESTE
-  #####################################################
-
-  west_on_min: "{{ west_center - west_on }}"
-  west_on_max: "{{ west_center + west_on }}"
-
-  west_off_min: "{{ west_center - west_off }}"
-  west_off_max: "{{ west_center + west_off }}"
-
-  west_in_on_zone: >
-    {{ el > min_el and west_on_min <= az <= west_on_max }}
-
-  west_in_off_zone: >
-    {{ az < west_off_min or az > west_off_max }}
+# ─────────────────────────────────────────────────────────────────────────────
+# MODE: queued — NO restart, para que el debounce no se cancele solo
+# max=2 es suficiente: 1 en curso + 1 en cola
+# ─────────────────────────────────────────────────────────────────────────────
+mode: queued
+max: 2
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# ACCIONES
+# ─────────────────────────────────────────────────────────────────────────────
 action:
 
+  # ── 1. ESTE ON ─────────────────────────────────────────────────────────────
   - choose:
 
-      #####################################################
-      # EAST ON
-      #####################################################
-
       - conditions:
           - condition: template
-            value_template: >
-              {{ east_in_on_zone and states(east_state) == 'off' }}
+            value_template: "{{ east_in_on and not east_is_on }}"
 
         sequence:
 
@@ -187,26 +268,59 @@ action:
             target:
               entity_id: !input east_state
 
-          - service: input_boolean.turn_off
-            target:
-              entity_id: !input west_state
+          # Cruce de zonas: si Oeste estaba activa, la desactivamos
+          # (el sol no puede iluminar ambas fachadas a la vez)
+          - if:
+              - condition: template
+                value_template: "{{ west_is_on }}"
+            then:
+              - service: input_boolean.turn_off
+                target:
+                  entity_id: !input west_state
 
           - service: cover.set_cover_position
             target: !input east_covers
             data:
-              position: 0
+              position: !input closed_position
+
+          - if:
+              - condition: template
+                value_template: "{{ notify_svc != '' }}"
+            then:
+              - service: "{{ notify_svc }}"
+                data:
+                  title: "☀️ Persianas Este → BAJADAS"
+                  message: >
+                    Sol az={{ az | round(1) }}° el={{ el | round(1) }}° —
+                    Posición {{ closed_pos }}%
 
 
-      #####################################################
-      # EAST OFF
-      #####################################################
+      # ── 2. ESTE OFF con debounce ──────────────────────────────────────────
 
       - conditions:
           - condition: template
-            value_template: >
-              {{ east_in_off_zone and states(east_state) == 'on' }}
+            value_template: "{{ east_out_off and east_is_on }}"
 
         sequence:
+
+          # Esperar debounce_minutes con el sol fuera de zona
+          # Si durante la espera vuelve a entrar en zona ON, cancelamos
+          - wait_template: "{{ east_in_on }}"
+            timeout:
+              minutes: !input debounce_minutes
+            continue_on_timeout: true
+
+          # Re-evaluar azimut/elevación frescos después del delay
+          - variables:
+              az_now: "{{ state_attr(sun, 'azimuth') | float(0) }}"
+              el_now: "{{ state_attr(sun, 'elevation') | float(0) }}"
+              east_diff_now: >
+                {% set d = (az_now - east_center_v + 180) % 360 - 180 %}
+                {{ d | abs }}
+              east_still_out: "{{ el_now <= min_el or east_diff_now > east_off_v }}"
+
+          - condition: template
+            value_template: "{{ east_still_out }}"
 
           - service: input_boolean.turn_off
             target:
@@ -215,15 +329,23 @@ action:
           - service: cover.open_cover
             target: !input east_covers
 
+          - if:
+              - condition: template
+                value_template: "{{ notify_svc != '' }}"
+            then:
+              - service: "{{ notify_svc }}"
+                data:
+                  title: "🌤 Persianas Este → SUBIDAS"
+                  message: >
+                    Debounce completado. az={{ az_now | round(1) }}°
+                    el={{ el_now | round(1) }}°
 
-      #####################################################
-      # WEST ON
-      #####################################################
+
+      # ── 3. OESTE ON ───────────────────────────────────────────────────────
 
       - conditions:
           - condition: template
-            value_template: >
-              {{ west_in_on_zone and states(west_state) == 'off' }}
+            value_template: "{{ west_in_on and not west_is_on }}"
 
         sequence:
 
@@ -231,26 +353,54 @@ action:
             target:
               entity_id: !input west_state
 
-          - service: input_boolean.turn_off
-            target:
-              entity_id: !input east_state
+          - if:
+              - condition: template
+                value_template: "{{ east_is_on }}"
+            then:
+              - service: input_boolean.turn_off
+                target:
+                  entity_id: !input east_state
 
           - service: cover.set_cover_position
             target: !input west_covers
             data:
-              position: 0
+              position: !input closed_position
+
+          - if:
+              - condition: template
+                value_template: "{{ notify_svc != '' }}"
+            then:
+              - service: "{{ notify_svc }}"
+                data:
+                  title: "☀️ Persianas Oeste → BAJADAS"
+                  message: >
+                    Sol az={{ az | round(1) }}° el={{ el | round(1) }}° —
+                    Posición {{ closed_pos }}%
 
 
-      #####################################################
-      # WEST OFF
-      #####################################################
+      # ── 4. OESTE OFF con debounce ─────────────────────────────────────────
 
       - conditions:
           - condition: template
-            value_template: >
-              {{ west_in_off_zone and states(west_state) == 'on' }}
+            value_template: "{{ west_out_off and west_is_on }}"
 
         sequence:
+
+          - wait_template: "{{ west_in_on }}"
+            timeout:
+              minutes: !input debounce_minutes
+            continue_on_timeout: true
+
+          - variables:
+              az_now: "{{ state_attr(sun, 'azimuth') | float(0) }}"
+              el_now: "{{ state_attr(sun, 'elevation') | float(0) }}"
+              west_diff_now: >
+                {% set d = (az_now - west_center_v + 180) % 360 - 180 %}
+                {{ d | abs }}
+              west_still_out: "{{ el_now <= min_el or west_diff_now > west_off_v }}"
+
+          - condition: template
+            value_template: "{{ west_still_out }}"
 
           - service: input_boolean.turn_off
             target:
@@ -259,5 +409,13 @@ action:
           - service: cover.open_cover
             target: !input west_covers
 
-
-mode: single
+          - if:
+              - condition: template
+                value_template: "{{ notify_svc != '' }}"
+            then:
+              - service: "{{ notify_svc }}"
+                data:
+                  title: "🌤 Persianas Oeste → SUBIDAS"
+                  message: >
+                    Debounce completado. az={{ az_now | round(1) }}°
+                    el={{ el_now | round(1) }}°
